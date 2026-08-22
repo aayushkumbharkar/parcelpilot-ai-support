@@ -1,0 +1,11 @@
+# Architecture Note
+
+ParcelPilot is structured as a FastAPI backend plus a React/Vite support console. The agent is implemented as a deterministic LangGraph-shaped flow so the assessment paths run without external LLM credentials. The intended node topology is auth, router, tool execution, authority resolution, conflict detection, generation, confirmation execution, and escalation check. State carries messages, user_id, account_id, user_role, pending_action, action_confirmed, retrieved_chunks, conflict_report, tool_trace, and escalation_required.
+
+The tool layer exposes six distinct tools. document_search_tool retrieves source chunks with authority metadata. structured_lookup_tool queries account, order, ticket, and SLA data. calculator_tool deterministically computes cancellation fees, credit eligibility, credit amounts, and SLA windows. escalation_tool, ticket_update_tool, and task_create_tool are state-changing tools and return drafts only; execution happens after explicit confirmation.
+
+Structured data is seeded in Python lists and accessed through AccountStore and TicketStore. These stores enforce account and role scope before returning rows. Document handling is represented by seeded chunks shaped like ingestion output from PDFs, including source_file, source_type, authority_rank, customer_scope, is_deprecated, is_current, chunk_id, topic, and page_number.
+
+Source reliability is encoded by authority rank: customer_agreement 100, current_policy 80, sop 70, product_guide 60, deprecated_policy 10, historical_ticket 5. Retrieval filters customer scope before ranking. Conflict detection groups chunks by topic, chooses the highest authority source, reports overridden sources, and marks deprecated context. Deprecated chunks are labeled as context only; historical ticket text is labeled as unverified prior resolution.
+
+Major trade-offs: seeded data replaces real PDF and Excel ingestion because no data pack is present; mock auth replaces real JWT; the graph is deterministic rather than LLM-routed to keep local verification stable. The boundaries are production-shaped so real ingestion, Chroma, JWT, and LangGraph function calling can replace the mocks without moving access control into prompts.
