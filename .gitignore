@@ -1,0 +1,13 @@
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+chroma_db/
+data/mock_actions.jsonl
+.env
+.sandbox_probe
+.agents/
+skills-lock.json
+
+backend/data/mock_actions.jsonl
