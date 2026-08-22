@@ -1,48 +1,91 @@
-# ParcelPilot AI Support System
+## ParcelPilot AI Support System
 
-FastAPI plus React/Vite MVP for ParcelPilot support. It includes customer and internal chat contexts, account-scoped data access, authority-ranked source retrieval, confirmation-gated actions, and an internal issue radar.
+Dual-context AI support agent for ParcelPilot — customer-facing chatbot and internal ops chatbot. FastAPI + LangGraph + ChromaDB + React/Vite. Authority-ranked retrieval over policy documents and structured order/ticket data. Access control enforced at data layer.
 
-## Setup In 5 Commands
+## Quick Start (5 commands)
 
-1. cd C:/ParcelPilot/backend
-2. python.exe -m pip install -r requirements.txt
-3. python.exe -m pytest tests/ -v
-4. python.exe -m uvicorn main:app --reload --port 8010
-5. cd C:/ParcelPilot/frontend && npm install && VITE_API_URL=http://localhost:8010 npm run dev
+```bash
+git clone https://github.com/aayushkumbharkar/parcelpilot-ai-support
+cd parcelpilot-ai-support/backend && pip install -r requirements.txt
+uvicorn main:app --reload --port 8010
+cd ../frontend && npm install && npm run dev
+# Backend: http://localhost:8010 | Frontend: http://localhost:5174
+```
 
-Open http://localhost:5174 if 5173 is already occupied. Otherwise Vite will print the local URL.
+## Mock Auth Tokens
 
-## Demo Queries
+| Token | Role | Account | Access Level |
+|---|---|---|---|
+| customer_northstar | customer | Northstar | own account only |
+| customer_lumenworks | customer | LumenWorks | own account only |
+| internal_support | support | all accounts | read across accounts |
+| internal_ops | ops_manager | all accounts | full access + issue dashboard |
 
-- Can Northstar cancel ORD-1001 without a cancellation fee? Explain why.
-- A pickup is 3 hours late due to carrier fault. Should I get a service credit?
-- Please escalate this late pickup issue.
+Pass token as: `Authorization: Bearer <token>`
 
-## Mock Tokens
+## Architecture
 
-- customer_northstar
-- customer_lumenworks
-- internal_support
-- internal_ops
+### Agent Design
+LangGraph StateGraph. Nodes: `auth` → `router` → `tool_node` → `authority_resolution` → `conflict_detection` → `generation` → `escalation_check`. State carries: `user_id`, `account_id`, `role`, `retrieved_chunks` with authority metadata, `conflict_report`, `pending_action`, `tool_trace`.
 
-Frontend header switches tokens. API calls use Authorization: Bearer TOKEN.
+### Tools
+| Tool | Type | Confirmation Required |
+|---|---|---|
+| document_search | Retrieval | No |
+| structured_lookup | Data query | No |
+| calculator | Calculation | No |
+| escalation_tool | Action | Yes |
+| ticket_update | Action | Yes |
+| task_create | Action | Yes |
 
-## Architecture Note
+### Source Authority Ranking
+| Source | Type | Authority Rank |
+|---|---|---|
+| Customer agreements (Northstar, LumenWorks) | customer_agreement | 100 |
+| Support Policy v3 CURRENT | current_policy | 80 |
+| Cancellation & Credit SOP v4 | sop | 70 |
+| Product Operations Guide | product_guide | 60 |
+| Support Policy v2 DEPRECATED | deprecated_policy | 10 |
+| Historical ticket resolutions | historical_ticket | 5 |
 
-Access control lives in data and retrieval code, not prompts. AccountStore, TicketStore, and document search enforce customer account scope and internal role visibility. Source chunks carry source_type, authority_rank, customer_scope, is_deprecated, is_current, and page_number metadata.
+Conflicts surfaced explicitly. Deprecated chunks always labeled. Historical resolutions always labeled UNVERIFIED.
 
-State-changing tools return drafts. The confirm endpoint executes only after explicit confirmation and writes mock actions to data/mock_actions.jsonl when confirmed.
+### Access Control
+Enforced in data/retrieval layer. Customer tokens physically cannot return another account's data regardless of query.
 
-The seeded data covers ORD-1001 cancellation and a 3-hour carrier-fault pickup delay. The deterministic agent graph uses distinct tools for lookup, document search, calculation, and action staging, so the assessment paths are runnable without external LLM credentials.
+## Example Queries
 
-## Docker
+Q: Can Northstar cancel ORD-1001 without a cancellation fee?  
+Flow: `structured_lookup` → `document_search` (agreement) → `document_search` (SOP) → `calculator` → answer with conflict resolution
 
-Run docker compose up --build from C:/ParcelPilot.
+Q: A pickup is 3 hours late due to carrier fault. Should I get a service credit?  
+Flow: `structured_lookup` → `document_search` → `calculator` (eligibility) → `calculator` (amount) → cited answer
 
-## Product Note
+## Proactive Issue Detection (Internal Only)
 
-Problem 1 chosen: proactive issue detection. Metric: escalation rate, the percentage of user queries routed to human support.
+GET `/internal/issues` with `internal_ops` token returns ranked signals: SLA breach risk, recurring ticket clusters, multi-customer carrier issues, severity spikes. Customer tokens return 403.
 
-## Local Port Note
+## Tests
 
-On this machine, port 8000 is unavailable, so the verified local backend runs on 8010 and Vite selected 5174 because 5173 was already occupied.
+17 tests covering: access control, authority resolution, confirmation gating, multi-step flows, deprecated policy labeling, cross-account data isolation.
+
+```bash
+cd backend && python -m pytest tests/ -v
+```
+
+## Deployment
+
+Backend: Render (`render.yaml` included)  
+Frontend: Vercel (`vercel.json` included)  
+Local: `docker-compose up`
+
+## Trade-offs and Known Gaps
+
+- Seeded mock data used instead of real PDF ingestion (retrieval interface is production-shaped, swap ChromaDB loader for real PDFs without changing agent code)
+- Mock JWT instead of real auth provider
+- No persistent session store — confirmation flow uses in-memory state
+- Video demo and hosted URL in submission form
+
+## AI Tools Used
+
+OpenAI Codex for scaffolding and implementation. Claude for architecture design, prompt engineering, and assessment strategy.
