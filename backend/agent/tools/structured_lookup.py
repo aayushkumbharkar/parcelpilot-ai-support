@@ -8,29 +8,34 @@ from data.ticket_store import TicketStore
 SIGNAL_QUERY_MAP = {
     "sla_breach_risk": {
         "query_type": "ticket",
-        "fields": ["ticket_id", "priority", "status", "created_hours_ago", "sla_hours", "account_id"],
+        "fields": ["ticket_id", "priority", "status", "created_at", "sla_hours", "account_id"],
     },
     "stale_high_priority": {
         "query_type": "ticket",
-        "fields": ["ticket_id", "priority", "status", "last_update_hours_ago", "account_id"],
+        "fields": ["ticket_id", "priority", "status", "last_updated", "account_id"],
     },
     "multi_customer_impact": {
         "query_type": "ticket",
-        "fields": ["ticket_id", "priority", "issue_type", "account_id", "carrier_id", "status"],
+        "fields": ["ticket_id", "issue_type", "account_id", "carrier_id", "status"],
     },
     "severity_spike": {
         "query_type": "ticket",
-        "fields": ["ticket_id", "priority", "created_hours_ago", "account_id", "status"],
+        "fields": ["ticket_id", "priority", "created_at", "account_id", "status"],
     },
 }
 
 
 def _select_fields(row: dict, fields: list[str]) -> dict:
-    out = {field: row.get(field) for field in fields}
-    for field in ["sla_hours", "created_hours_ago", "last_update_hours_ago", "issue_type", "carrier_id", "description"]:
-        if field in row and field not in out:
-            out[field] = row[field]
-    return out
+    out = dict(row)
+    if "created_hours_ago" in row:
+        out["created_at"] = row["created_hours_ago"]
+    if "last_update_hours_ago" in row:
+        out["last_updated"] = row["last_update_hours_ago"]
+    selected = {field: out.get(field) for field in fields}
+    for field in ["sla_hours", "created_hours_ago", "last_update_hours_ago", "issue_type", "carrier_id", "description", "created_at", "last_updated"]:
+        if field in out and field not in selected:
+            selected[field] = out[field]
+    return selected
 
 
 def structured_lookup_tool(
@@ -54,8 +59,17 @@ def structured_lookup_tool(
     elif query_type == "signal":
         signal_type = filters["signal_type"]
         ticket_ids = filters.get("ticket_ids", [])
-        config = SIGNAL_QUERY_MAP[signal_type]
-        rows = [_select_fields(tickets.get_ticket(principal, ticket_id), config["fields"]) for ticket_id in ticket_ids]
+        config = SIGNAL_QUERY_MAP.get(signal_type, {
+            "query_type": "ticket",
+            "fields": ["ticket_id", "priority", "status", "created_at", "sla_hours", "account_id"]
+        })
+        rows = []
+        for ticket_id in ticket_ids:
+            try:
+                row = tickets.get_ticket(principal, ticket_id)
+                rows.append(_select_fields(row, config["fields"]))
+            except (KeyError, PermissionError):
+                pass
         data = {"signal_type": signal_type, "tickets": rows, "query_type": config["query_type"], "fields": config["fields"]}
     elif query_type == "sla_status":
         data = [ticket for ticket in tickets.list_visible(principal) if ticket["status"] != "resolved"]

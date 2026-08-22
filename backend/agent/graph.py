@@ -10,13 +10,14 @@ def _trace(tool: str, result_summary: str, status: str = "done") -> dict:
 
 
 def _parse_investigate(message: str) -> dict | None:
-    match = re.match(r"\s*investigate\s+([a-z_]+)\s+for\s+(.+)\s*", message, re.IGNORECASE)
+    match = re.match(r"^\s*investigate\s+([\w\s_]+?)\s+for\s+(.+)$", message.strip(), re.IGNORECASE)
     if not match:
         return None
+    raw_signal = match.group(1).strip().lower().replace(" ", "_")
     ticket_ids = re.findall(r"TCK-\d+", match.group(2), re.IGNORECASE)
     if not ticket_ids:
         return None
-    return {"signal_type": match.group(1).lower(), "ticket_ids": [ticket.upper() for ticket in ticket_ids]}
+    return {"signal_type": raw_signal, "ticket_ids": [ticket.upper() for ticket in ticket_ids]}
 
 
 def _recommendation(signal_type: str) -> str:
@@ -29,27 +30,40 @@ def _recommendation(signal_type: str) -> str:
 
 
 def _ticket_line(ticket: dict, signal_type: str) -> str:
-    created = ticket.get("created_hours_ago")
+    ticket_id = ticket.get("ticket_id")
+    priority = ticket.get("priority") or "P1"
+    status = ticket.get("status")
+    account_id = ticket.get("account_id")
+
+    created = ticket.get("created_hours_ago") if ticket.get("created_hours_ago") is not None else ticket.get("created_at")
     sla = ticket.get("sla_hours")
-    remaining = None
+
     if created is not None and sla is not None:
-        remaining = float(sla) - float(created)
-    sla_text = "SLA window: unknown."
-    if remaining is not None:
+        created_val = float(created)
+        sla_val = float(sla)
+        remaining = sla_val - created_val
         if remaining <= 0:
-            sla_text = f"Opened {created:g} hours ago. SLA window: {sla:g} hours. BREACHED."
+            sla_str = f"Opened {created_val:g} hours ago. SLA window: {sla_val:g} hours. BREACHED."
         else:
-            sla_text = f"Opened {created:g} hours ago. SLA window: {sla:g} hours. Time remaining: {remaining:g} hours."
-    stale_text = ""
-    if signal_type == "stale_high_priority" and ticket.get("last_update_hours_ago") is not None:
-        stale_text = f" last updated {ticket['last_update_hours_ago']} hours ago."
-    impact_text = ""
-    if signal_type == "multi_customer_impact":
-        impact_text = f" Issue type: {ticket.get('issue_type')}. carrier {ticket.get('carrier_id')}."
-    return (
-        f"{ticket['ticket_id']} - {ticket.get('priority')} priority, status: {ticket.get('status')}. "
-        f"{sla_text}{stale_text} Account: {ticket.get('account_id')}.{impact_text}"
-    )
+            sla_str = f"Opened {created_val:g} hours ago. SLA window: {sla_val:g} hours. Time remaining: {remaining:g} hours."
+    elif created is not None:
+        sla_str = f"Opened {float(created):g} hours ago."
+    else:
+        sla_str = "SLA window: unknown."
+
+    last_updated = ticket.get("last_update_hours_ago") if ticket.get("last_update_hours_ago") is not None else ticket.get("last_updated")
+    stale_part = f" last updated {last_updated:g} hours ago." if last_updated is not None and signal_type == "stale_high_priority" else ""
+
+    carrier_id = ticket.get("carrier_id")
+    issue_type = ticket.get("issue_type")
+    carrier_part = f" Issue type: {issue_type}. carrier {carrier_id}." if carrier_id and signal_type == "multi_customer_impact" else ""
+
+    lines = [
+        f"{ticket_id} — {priority} priority, status: {status}.",
+        f"{sla_str}{stale_part}{carrier_part}",
+        f"Account: {account_id}."
+    ]
+    return "\n".join(lines)
 
 
 def _investigate_response(principal: Principal, message: str) -> dict | None:
@@ -57,12 +71,14 @@ def _investigate_response(principal: Principal, message: str) -> dict | None:
     if not parsed:
         return None
     lookup = structured_lookup_tool(principal, "signal", None, parsed)
-    tickets = lookup["result"]["tickets"]
+    tickets = lookup.get("result", {}).get("tickets", [])
     if not tickets:
         return None
     docs = document_search_tool(principal, parsed["signal_type"].replace("_", " "), None, min_authority_rank=0)
-    lines = [_ticket_line(ticket, parsed["signal_type"]) for ticket in tickets]
-    answer = chr(10).join(lines + [_recommendation(parsed["signal_type"])])
+
+    ticket_blocks = [_ticket_line(t, parsed["signal_type"]) for t in tickets]
+    rec = _recommendation(parsed["signal_type"])
+    answer = "\n\n".join(ticket_blocks + [rec])
     return {
         "answer": answer,
         "tool_trace": [
